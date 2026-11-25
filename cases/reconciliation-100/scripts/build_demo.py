@@ -92,7 +92,7 @@ def main():
     (ROOT/'reports/demo_result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
     manual=[r for r in payload['accounts'] if r['source_mode']=='MANUAL_FIXTURE']
     with (ROOT/'examples/manual_upload_example.csv').open('w',encoding='utf-8-sig',newline='') as f:
-        writer=csv.DictWriter(f,fieldnames=['account_id','currency','snapshot_at','external_balance','available','source_batch_id'])
+        writer=csv.DictWriter(f,lineterminator='\n',fieldnames=['account_id','currency','snapshot_at','external_balance','available','source_batch_id'])
         writer.writeheader()
         writer.writerows({k:r[k] for k in writer.fieldnames} for r in manual)
     (ROOT/'examples/api_response_fixture.json').write_text(json.dumps({'simulation':True,'items':[r for r in payload['accounts'] if r['source_mode']=='API_FIXTURE']},ensure_ascii=False,indent=2),encoding='utf-8')
