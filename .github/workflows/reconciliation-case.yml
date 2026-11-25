@@ -1,0 +1,29 @@
+name: Reconciliation 100 checks
+on:
+  push:
+    paths:
+      - 'cases/reconciliation-100/**'
+      - '.github/workflows/reconciliation-case.yml'
+  pull_request:
+    paths:
+      - 'cases/reconciliation-100/**'
+      - '.github/workflows/reconciliation-case.yml'
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Rebuild synthetic demonstration
+        run: python scripts/build_demo.py
+        working-directory: cases/reconciliation-100
+      - name: Run reconciliation and treasury controls
+        run: python -m unittest discover -s tests -v
+        working-directory: cases/reconciliation-100
+      - name: Verify reproducible reports
+        run: git diff --exit-code -- examples reports/dashboard-data.js reports/demo_result.json
+        working-directory: cases/reconciliation-100
