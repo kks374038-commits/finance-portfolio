@@ -1,0 +1,24 @@
+import assert from 'node:assert/strict';
+import {D1} from './d1.mjs';
+import {act,context,readState} from '../lib/service.mjs';
+import {sharedContext,tokenHash,checkSharedWrite} from '../lib/shared-access.mjs';
+import {today} from '../lib/model.mjs';
+let passed=0;async function test(name,fn){await fn();passed++;console.log('OK '+name);}
+const db=new D1(),owner={userId:'owner',email:'owner@example.test'};await act(db,await context(db,owner),{action:'bootstrap'});const admin=await context(db,owner),profileId=(await readState(db,admin)).selected;
+await act(db,admin,{action:'setup_wallets',profileId});const wallet=(await readState(db,admin)).wallets.find(w=>w.asset==='USDT'),otherProfile=(await act(db,admin,{action:'profile',name:'Закрытый другой портфель',email:'other@example.test'})).id,otherWallet=(await act(db,admin,{action:'wallet',profileId:otherProfile,label:'Other',asset:'BTC',network:'Bitcoin'})).id;
+const adminKey='a'.repeat(43),viewerKey='b'.repeat(43),env={ACCESS_ADMIN_HASH:await tokenHash(adminKey),ACCESS_VIEWER_HASH:await tokenHash(viewerKey),ACCESS_EXPIRES_AT:'2099-01-01T00:00:00Z'};
+let a,v;
+await test('Без ключа и с вымышленным ключом данных нет',async()=>{for(const key of ['',null,'x'.repeat(43)])await assert.rejects(()=>sharedContext(db,env,key),e=>e.status===401);});
+await test('Ссылки получают разные роли на сервере',async()=>{a=await sharedContext(db,env,adminKey);v=await sharedContext(db,env,viewerKey);assert.equal(a.role,'admin');assert.equal(v.role,'viewer');assert.equal(a.scopeProfileId,profileId);});
+await test('Пользователь по ссылке видит только один портфель без email и аудита',async()=>{const s=await readState(db,v,profileId);assert.equal(s.profiles.length,1);assert.equal(s.profiles[0].viewer_email,undefined);assert.equal(s.audit.length,0);assert.equal(s.canManageAccess,false);});
+await test('Администратор по ссылке также не видит чужие портфели',async()=>{await assert.rejects(()=>readState(db,a,otherProfile),e=>e.status===403);assert.equal((await readState(db,a)).profiles.length,1);});
+const operation={action:'transaction',profileId,walletId:wallet.id,requestId:crypto.randomUUID(),type:'deposit',amount:'100',expectedVersion:wallet.version,date:today(),note:'Тест доступа',feePercent:'0',feeFixed:'0'};
+await test('Просмотровая ссылка не разрешает ни одно действие записи',async()=>{for(const action of ['transaction','operation','import','reverse','wallet','price','setup_wallets','profile','sharing_toggle'])await assert.rejects(()=>checkSharedWrite(db,v,{...operation,action,role:'admin'}),e=>e.status===403);});
+await test('Админ-ссылка может записать операцию своего портфеля',async()=>{await checkSharedWrite(db,a,operation);await act(db,a,operation);assert.equal((await readState(db,a)).wallets.find(w=>w.id===wallet.id).balance,'100000000000000000000');});
+await test('Нельзя менять курс чужого счёта, подставив разрешённый profileId',async()=>{await assert.rejects(()=>checkSharedWrite(db,a,{action:'price',profileId,walletId:otherWallet}),e=>e.status===403);});
+await test('Нельзя обойти область доступа другим profileId',async()=>{await assert.rejects(()=>checkSharedWrite(db,a,{...operation,profileId:otherProfile}),e=>e.status===403);});
+await test('Админ-ссылка не создаёт новые роли и не отключает контроль доступа',async()=>{for(const action of ['profile','sharing_toggle','bootstrap'])await assert.rejects(()=>checkSharedWrite(db,a,{...operation,action}),e=>e.status===403);});
+await test('Истёкшая ссылка отвергается',async()=>{await assert.rejects(()=>sharedContext(db,{...env,ACCESS_EXPIRES_AT:'2020-01-01T00:00:00Z'},adminKey),e=>e.status===401);});
+await test('Владелец может отключить обе ссылки',async()=>{await act(db,admin,{action:'sharing_toggle',enabled:false});for(const key of [adminKey,viewerKey])await assert.rejects(()=>sharedContext(db,env,key),e=>e.status===403);});
+await test('Вход владельца остаётся рабочим после отключения ссылок',async()=>{assert.equal((await context(db,owner)).role,'admin');await act(db,admin,{action:'sharing_toggle',enabled:true});assert.equal((await sharedContext(db,env,viewerKey)).role,'viewer');});
+console.log(JSON.stringify({passed}));

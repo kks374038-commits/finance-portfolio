@@ -1,0 +1,1 @@
+ALTER TABLE `owners` ADD `share_enabled` integer DEFAULT 1 NOT NULL;

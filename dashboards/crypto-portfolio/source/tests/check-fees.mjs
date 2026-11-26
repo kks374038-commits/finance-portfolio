@@ -1,0 +1,28 @@
+import assert from 'node:assert/strict';
+import {D1} from './d1.mjs';
+import {act,context,readState} from '../lib/service.mjs';
+import {decimal,formatUnits,today,summarize} from '../lib/model.mjs';
+import {calculateFee} from '../lib/transactions.mjs';
+let passed=0;async function test(name,fn){await fn();passed++;console.log('OK '+name);}
+const db=new D1(),user={userId:'owner',email:'owner@example.test'};await act(db,await context(db,user),{action:'bootstrap'});const admin=await context(db,user),profileId=(await readState(db,admin)).selected;
+await test('Создаются 10 нулевых кошельков',async()=>{await act(db,admin,{action:'setup_wallets',profileId});const s=await readState(db,admin,profileId);assert.equal(s.wallets.length,10);assert(s.wallets.every(w=>w.balance==='0'));});
+await test('Повторное создание не дублирует кошельки',async()=>{await act(db,admin,{action:'setup_wallets',profileId});assert.equal((await readState(db,admin,profileId)).wallets.length,10);});
+await test('Комиссия 0,08% от 1000 равна 0,8',()=>assert.equal(formatUnits(calculateFee(decimal('1000'),'0.08','0','USDT')),'0.8'));
+await test('Минимальная комиссия округляется вверх до точности актива',()=>assert.equal(formatUnits(calculateFee(decimal('0.000001'),'0.08','0','USDT')),'0.000001'));
+await test('Отрицательная и превышающая 100% комиссия отклоняются',()=>{assert.throws(()=>calculateFee(decimal('1'),'-1','0','USDT'));assert.throws(()=>calculateFee(decimal('1'),'101','0','USDT'));});
+const state=()=>readState(db,admin,profileId),wallet=async a=>(await state()).wallets.find(w=>w.asset===a),bal=async a=>formatUnits((await wallet(a)).balance);
+async function body(type,asset,amount,extra={}){const w=await wallet(asset);return {action:'transaction',profileId,requestId:crypto.randomUUID(),walletId:w.id,expectedVersion:w.version,type,amount,feePercent:'0',feeFixed:'0',date:today(),note:'Проверка комиссии',...extra};}
+let deposit,withdraw,exchange;
+await test('Вход 1000 с комиссией 1% + 2 даёт 988',async()=>{deposit=await body('deposit','USDT','1000',{feePercent:'1',feeFixed:'2'});await act(db,admin,deposit);assert.equal(await bal('USDT'),'988');const s=await state();assert.equal(s.entries.filter(e=>e.group_id===deposit.requestId).length,2);assert.equal(formatUnits(summarize(s.wallets,s.entries,'USDT','2000-01-01').fees),'12');});
+await test('Повтор запроса не списывает комиссию дважды',async()=>{assert.equal((await act(db,admin,deposit)).alreadyRecorded,true);assert.equal(await bal('USDT'),'988');});
+await test('Изменение тарифа с тем же requestId отклоняется',async()=>{await assert.rejects(()=>act(db,admin,{...deposit,feePercent:'2'}),e=>e.status===409);});
+await test('Выход 100 + комиссия 1% + 2 списывает 103',async()=>{withdraw=await body('withdrawal','USDT','100',{feePercent:'1',feeFixed:'2'});await act(db,admin,withdraw);assert.equal(await bal('USDT'),'885');});
+await test('Недостаток средств с комиссией не пишет ни одной строки',async()=>{const before=(await state()).entries.length;await assert.rejects(async()=>act(db,admin,await body('withdrawal','USDT','885',{feeFixed:'1'})));assert.equal(await bal('USDT'),'885');assert.equal((await state()).entries.length,before);});
+await test('Обмен 100 USDT по 0,001 BTC, комиссия 0,08% даёт 0,09992 BTC',async()=>{const target=await wallet('BTC');exchange=await body('exchange','USDT','100',{targetWalletId:target.id,targetExpectedVersion:target.version,rate:'0.001',feePercent:'0.08'});await act(db,admin,exchange);assert.equal(await bal('USDT'),'785');assert.equal(await bal('BTC'),'0.09992');assert.equal((await state()).entries.filter(e=>e.group_id===exchange.requestId).length,3);});
+await test('Просроченная версия получателя отменяет обмен целиком',async()=>{const before=await bal('USDT');await assert.rejects(async()=>act(db,admin,await body('exchange','USDT','10',{targetWalletId:(await wallet('BTC')).id,targetExpectedVersion:0,rate:'0.001',feePercent:'0.08'})),e=>e.status===409);assert.equal(await bal('USDT'),before);});
+await test('Нулевой курс и обмен в тот же актив отклоняются',async()=>{for(const extra of [{targetWalletId:(await wallet('BTC')).id,targetExpectedVersion:(await wallet('BTC')).version,rate:'0'},{targetWalletId:(await wallet('USDT')).id,targetExpectedVersion:(await wallet('USDT')).version,rate:'1'}])await assert.rejects(async()=>act(db,admin,await body('exchange','USDT','10',extra)));});
+await test('Сторно обмена отменяет обе стороны и комиссию',async()=>{await act(db,admin,{action:'reverse',profileId,entryId:exchange.requestId,requestId:crypto.randomUUID(),date:today(),note:'Отмена обмена'});assert.equal(await bal('USDT'),'885');assert.equal(await bal('BTC'),'0');assert.equal((await state()).entries.filter(e=>e.reversal_of&&[exchange.requestId,exchange.requestId+':in',exchange.requestId+':fee'].includes(e.reversal_of)).length,3);});
+await test('Повторное сторно группы запрещено',async()=>{await assert.rejects(()=>act(db,admin,{action:'reverse',profileId,entryId:exchange.requestId+':fee',requestId:crypto.randomUUID(),date:today(),note:'Повтор'}),e=>e.status===409);});
+await test('Сторно выхода возвращает и комиссию',async()=>{await act(db,admin,{action:'reverse',profileId,entryId:withdraw.requestId,requestId:crypto.randomUUID(),date:today(),note:'Отмена выхода'});assert.equal(await bal('USDT'),'988');});
+await test('Пользователь не может проводить обмен и создавать кошельки',async()=>{const viewer=await context(db,{userId:'view',email:'view@example.test'});for(const action of ['transaction','setup_wallets'])await assert.rejects(()=>act(db,viewer,{...deposit,action}),e=>e.status===403);});
+console.log(JSON.stringify({passed}));

@@ -1,12 +1,12 @@
 {
-  "name": "crypto-portfolio-demo",
-  "version": "1.0.0",
+  "name": "crypto-portfolio-linked-client",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --config vite.demo.config.ts",
     "build": "vite build --config vite.demo.config.ts",
-    "test": "node tests/check-chart.mjs"
+    "test": "node tests/check.mjs && node tests/check-chart.mjs && node tests/check-fees.mjs && node tests/check-access.mjs"
   },
   "dependencies": {
     "react": "19.2.6",
