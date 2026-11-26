@@ -1,0 +1,23 @@
+'use client';
+import {useState} from 'react';
+import {TrendingUp} from 'lucide-react';
+import {assetSeries} from '../lib/chart.mjs';
+import {formatUnits,today} from '../lib/model.mjs';
+const quantity=(value:string)=>formatUnits(value).replace('.',',');
+const dateLabel=(d:string)=>d.slice(8)+'.'+d.slice(5,7)+'.'+d.slice(0,4);
+export default function AssetChart({wallets,entries,asset,start}:any){
+ const [mode,setMode]=useState('balance'),[hover,setHover]=useState<number|null>(null);
+ const data=assetSeries(wallets,entries,asset,start,today(),mode),opening=BigInt(data.opening),delta=BigInt(data.change),points=data.points;
+ const raw=points.map((p:any)=>Number(p.units)/1e18),low=Math.min(...raw,Number(opening)/1e18),high=Math.max(...raw,Number(opening)/1e18),pad=(high-low||Math.abs(high)||1)*.15,min=low>=0?Math.max(0,low-pad):low-pad,max=high+pad;
+ const W=900,H=290,L=85,R=20,T=20,B=37,width=W-L-R,height=H-T-B,from=Date.parse(start),to=Date.parse(today());
+ const x=(d:string)=>L+(to===from?0:(Date.parse(d)-from)/(to-from))*width,y=(v:number)=>T+(max-v)/(max-min)*height;
+ const coords=points.map((p:any)=>({...p,x:x(p.date),y:y(Number(p.units)/1e18)}));
+ const path=coords.map((p:any,i:number)=>i?`H${p.x} V${p.y}`:`M${p.x},${p.y}`).join(' '),active=coords[hover===null?coords.length-1:Math.min(hover,coords.length-1)];
+ const signed=(v:bigint)=>(v>0n?'+':'')+quantity(v.toString());
+ function move(clientX:number,rect:DOMRect){const sx=(clientX-rect.left)/rect.width*W;let at=0;coords.forEach((p:any,i:number)=>{if(Math.abs(p.x-sx)<Math.abs(coords[at].x-sx))at=i;});setHover(at);}
+ return <article className="panel asset-chart-panel"><div className="panel-head"><div><h2>Изменение актива <span className="chart-symbol">{asset}</span></h2><p>{mode==='balance'?'Учётный баланс с пополнениями и выводами':'Только ручные начисления и их сторно'} · по итогам дня</p></div><div className="chart-switch" aria-label="Режим графика">{[['balance','Баланс'],['growth','Ручной прирост']].map(([id,text])=><button key={id} className={mode===id?'selected':''} aria-pressed={mode===id} onClick={()=>{setMode(id);setHover(null);}}>{text}</button>)}</div></div>
+ <div className="chart-numbers"><strong>{quantity(data.closing)} <small>{asset}</small></strong><span className={delta>=0n?'positive':'negative'}>{signed(delta)} {asset}{mode==='balance'&&opening>0n?' · '+(Number(delta*10000n/opening)/100).toLocaleString('ru-RU')+'%':''}<small>Изменение за выбранный период</small></span></div>
+ {!data.count?<div className="chart-empty"><TrendingUp size={34}/><strong>Нет операций по {asset}</strong><span>График появится после ручного ввода или загрузки CSV</span></div>:<><div className="chart-readout" aria-live="polite"><span>{dateLabel(active.date)}</span><b>{quantity(active.units)} {asset}</b></div><div className="balance-chart interactive-chart"><svg viewBox={`0 0 ${W} ${H}`} role="img" tabIndex={0} aria-label={`График ${mode==='balance'?'баланса':'ручного прироста'} ${asset}. Стрелки влево и вправо переключают даты.`} onPointerMove={e=>move(e.clientX,e.currentTarget.getBoundingClientRect())} onPointerLeave={()=>setHover(null)} onKeyDown={e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();setHover(Math.max(0,Math.min(coords.length-1,(hover??coords.length-1)+(e.key==='ArrowLeft'?-1:1))));}}}>
+ <defs><linearGradient id="assetFill" x1="0" y1="0" x2="0" y2="1"><stop stopColor="#f7a600" stopOpacity=".22"/><stop offset="1" stopColor="#f7a600" stopOpacity="0"/></linearGradient></defs>{[0,.25,.5,.75,1].map(v=><g key={v}><line x1={L} x2={W-R} y1={T+height*v} y2={T+height*v} stroke="#2b2e33" strokeDasharray="3 5"/><text x={L-12} y={T+height*v+5} textAnchor="end">{new Intl.NumberFormat('ru-RU',{maximumSignificantDigits:5}).format(max-v*(max-min))}</text></g>)}<path d={`${path} L${coords.at(-1)!.x},${H-B} H${coords[0].x} Z`} fill="url(#assetFill)"/><path d={path} stroke="#f7a600" strokeWidth="2.5" fill="none"/>{coords.map((p:any,i:number)=><g key={p.date}>{(i===0||i===coords.length-1||(p.x-coords[0].x>80&&coords.at(-1)!.x-p.x>80&&p.x-coords[i-1].x>80))&&<text x={p.x} y={H-9} textAnchor="middle">{p.date.slice(8)}.{p.date.slice(5,7)}</text>}<circle cx={p.x} cy={p.y} r="3" fill="#f7a600"><title>{dateLabel(p.date)}: {quantity(p.units)} {asset}</title></circle></g>)}<line x1={active.x} x2={active.x} y1={T} y2={H-B} stroke="#9a814e" strokeDasharray="4 4"/><circle cx={active.x} cy={active.y} r="5" fill="#f7a600" stroke="#111214" strokeWidth="2"/></svg></div></>}
+ <div className="chart-footnote">{dateLabel(start)} – {dateLabel(today())} · {mode==='balance'?'Движение количества актива, без рыночной переоценки.':'Начислено администратором; пополнения исключены.'}</div></article>;
+}
