@@ -6,5 +6,27 @@
  function ops(data,date,rs){const ids=new Set(rs.map(r=>r.id));return data.operations.filter(o=>o.date===date&&(ids.has(o.from)||ids.has(o.to)));}
  function proposals(rs){const sources=rs.filter(r=>r.quality==='fresh'&&r.status==='matched'&&r.priced&&r.age>=7&&r.free>0).map(r=>({...r,remaining:r.free}));const dests=rs.filter(r=>r.quality==='fresh'&&r.status==='matched'&&r.available!==null&&r.available<r.reserve).map(r=>({...r,need:r.reserve-r.available}));const plan=[];for(const b of dests){for(const a of sources){if(a.entity!==b.entity||a.asset!==b.asset||a.network!==b.network||a.id===b.id||!a.remaining||!b.need)continue;const amount=Math.min(a.remaining,b.need);a.remaining-=amount;b.need-=amount;plan.push({from:a,to:b,amount});}}return plan;}
  function inflight(data,date,rs){const ids=new Set(rs.map(r=>r.id));return data.operations.filter(o=>o.date<=date&&o.status==='pending'&&(ids.has(o.from)||ids.has(o.to)));}
- const api={money,rows,kpis,ops,proposals,inflight};if(typeof module!=='undefined')module.exports=api;else root.Liquidity=api;
+ // Attribute only comparable, fresh accounts. Values are integer kopecks.
+ function bridge(data,previousDate,date,filters={}){
+  const valid=r=>r.quality==='fresh'&&r.source!==null&&r.priced;
+  const before=rows(data,previousDate,filters).filter(valid),after=rows(data,date,filters).filter(valid);
+  const prev=new Map(before.map(r=>[r.id,r]));
+  const result={previousDate,date,opening:kpis(before).source,closing:kpis(after).source,operations:0,fx:0,reconciliation:0,coverage:0,compared:0,added:0,removed:0,details:[]};
+  for(const r of after){const p=prev.get(r.id);if(!p){result.added++;continue;}
+   const closeAtOldRate=money(r.source,r.assetInfo,p.rateMicro),openAtOldRate=p.sourceBase;
+   const operations=money(r.incoming-r.outgoing,r.assetInfo,p.rateMicro);
+   const fx=r.sourceBase-closeAtOldRate,reconciliation=closeAtOldRate-openAtOldRate-operations;
+   result.operations+=operations;result.fx+=fx;result.reconciliation+=reconciliation;result.compared++;
+   result.details.push({id:r.id,opening:openAtOldRate,closing:r.sourceBase,operations,fx,reconciliation});
+  }
+  const currentIds=new Set(after.map(r=>r.id));result.removed=before.filter(r=>!currentIds.has(r.id)).length;
+  result.delta=result.closing-result.opening;
+  result.coverage=result.delta-result.operations-result.fx-result.reconciliation;
+  return result;
+ }
+ function attribution(data,date,filters={}){
+  const ds=[...new Set(data.snapshots.map(s=>s.date))].sort().filter(d=>d<=date);
+  return ds.slice(1).map((d,i)=>bridge(data,ds[i],d,filters));
+ }
+ const api={money,rows,kpis,ops,proposals,inflight,bridge,attribution};if(typeof module!=='undefined')module.exports=api;else root.Liquidity=api;
 })(typeof window!=='undefined'?window:globalThis);
